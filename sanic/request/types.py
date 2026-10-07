@@ -57,6 +57,7 @@ from sanic.log import error_logger
 from sanic.models.protocol_types import TransportProtocol
 from sanic.response import BaseHTTPResponse, HTTPResponse
 
+from .body import BodyContract
 from .form import parse_multipart_form
 from .parameters import RequestParameters
 
@@ -91,6 +92,7 @@ class Request(Generic[sanic_type, ctx_type]):
 
     __slots__ = (
         "__weakref__",
+        "_body_contract",
         "_cookies",
         "_ctx",
         "_id",
@@ -165,6 +167,7 @@ class Request(Generic[sanic_type, ctx_type]):
 
         # Init but do not inhale
         self.body = b""
+        self._body_contract: BodyContract | None = None
         self.conn_info: ConnInfo | None = None
         self._ctx: ctx_type | None = None
         self.parsed_accept: AcceptList | None = None
@@ -291,9 +294,33 @@ class Request(Generic[sanic_type, ctx_type]):
         return response
 
     async def receive_body(self):
-        """项目内部接口说明。"""
+        """通过请求体契约接收完整请求体（共享缓存模式）。"""
         if not self.body:
-            self.body = b"".join([data async for data in self.stream])
+            self.body = await self.body_contract.read_all(label="receive_body")
+
+    @property
+    def body_contract(self) -> BodyContract:
+        """请求体读取契约（懒创建）。
+
+        中间件、处理器与异常路径通过它选择共享缓存、独占流或
+        受限重放模式读取请求体，并可查询内容是否已被消费。
+        """
+        if self._body_contract is None:
+            self._body_contract = BodyContract(self)
+        return self._body_contract
+
+    @property
+    def active_body_contract(self) -> BodyContract | None:
+        """已创建的请求体契约；未创建时返回 None（不触发懒创建）。"""
+        return self._body_contract
+
+    async def aclose_body_contract(self, reason: str = "completed") -> None:
+        """回收请求体契约资源（若已创建）。
+
+        由协议层在请求结束、取消、超时或客户端断开后调用。
+        """
+        if self._body_contract is not None:
+            await self._body_contract.aclose(reason)
 
     @property
     def name(self) -> str | None:

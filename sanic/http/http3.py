@@ -108,25 +108,29 @@ class HTTPReceiver(Receiver, Stream):
         self.stage = Stage.HANDLER
         self.head_only = self.request.method.upper() == "HEAD"
 
-        if exception:
-            logger.info(  # no cov
-                f"{Colors.BLUE}[exception]: "
-                f"{Colors.RED}{exception}{Colors.END}",
-                exc_info=True,
-                extra={"verbosity": 1},
-            )
-            await self.error_response(exception)
-        else:
-            try:
+        try:
+            if exception:
                 logger.info(  # no cov
-                    f"{Colors.BLUE}[request]:{Colors.END} {self.request}",
+                    f"{Colors.BLUE}[exception]: "
+                    f"{Colors.RED}{exception}{Colors.END}",
+                    exc_info=True,
                     extra={"verbosity": 1},
                 )
-                await self.protocol.request_handler(self.request)
-            except Exception as e:  # no cov
-                # This should largely be handled within the request handler.
-                # But, just in case...
-                await self.run(e)
+                await self.error_response(exception)
+            else:
+                try:
+                    logger.info(  # no cov
+                        f"{Colors.BLUE}[request]:{Colors.END} {self.request}",
+                        extra={"verbosity": 1},
+                    )
+                    await self.protocol.request_handler(self.request)
+                except Exception as e:  # no cov
+                    # This should largely be handled within the request
+                    # handler. But, just in case...
+                    await self.run(e)
+        finally:
+            # 所有退出路径都必须回收请求体契约资源
+            await self.request.aclose_body_contract("completed")
         self.stage = Stage.IDLE
 
     async def error_response(self, exception: Exception) -> None:

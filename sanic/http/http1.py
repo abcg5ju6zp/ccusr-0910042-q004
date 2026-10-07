@@ -101,6 +101,7 @@ class Http(Stream, metaclass=TouchUpMeta):
             if not self.recv_buffer:
                 await self._receive_more()
             self.stage = Stage.REQUEST
+            body_close_reason = "completed"
             try:
                 # Receive and handle a request
                 self.response_func = self.http1_response_header
@@ -119,6 +120,11 @@ class Http(Stream, metaclass=TouchUpMeta):
                 if self.stage is Stage.RESPONSE:
                     await self.response.send(end_stream=True)
             except CancelledError as exc:
+                body_close_reason = (
+                    "client-lost"
+                    if self.protocol.conn_info.lost
+                    else "cancelled"
+                )
                 # Write an appropriate response before exiting
                 if not self.protocol.transport:
                     logger.info(
@@ -135,13 +141,29 @@ class Http(Stream, metaclass=TouchUpMeta):
                 self.keep_alive = False
                 await self.error_response(e)
             except Exception as e:
+                body_close_reason = "error"
                 # Write an error response
                 await self.error_response(e)
+            finally:
+                # 取消、超时、客户端断开等所有路径都必须回收请求体资源
+                if self.request is not None:
+                    await self.request.aclose_body_contract(body_close_reason)
 
             # Try to consume any remaining request body
             if self.request_body:
                 if self.response and 200 <= self.response.status < 300:
-                    error_logger.error(f"{self.request} body not consumed.")
+                    contract = (
+                        self.request.active_body_contract
+                        if self.request
+                        else None
+                    )
+                    # 只记录长度与摘要等安全信息，绝不记录内容
+                    detail = (
+                        f" Body contract: {contract!r}." if contract else ""
+                    )
+                    error_logger.error(
+                        f"{self.request} body not consumed.{detail}"
+                    )
                 # Limit the size because the handler may have set it infinite
                 self.request_max_size = min(
                     self.request_max_size, self.protocol.request_max_size

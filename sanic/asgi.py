@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import warnings
 
+from asyncio import CancelledError
 from typing import TYPE_CHECKING
 
 from sanic.compat import Header
@@ -235,11 +236,19 @@ class ASGIApp:
 
     async def __call__(self) -> None:
         """项目内部接口说明。"""
+        body_close_reason = "completed"
         try:
             self.stage = Stage.HANDLER
             await self.sanic_app.handle_request(self.request)
+        except CancelledError:
+            body_close_reason = "cancelled"
+            raise
         except Exception as e:
+            body_close_reason = "error"
             try:
                 await self.sanic_app.handle_exception(self.request, e)
             except Exception as exc:
                 await self.sanic_app.handle_exception(self.request, exc, False)
+        finally:
+            # 取消、超时、客户端断开等所有路径都必须回收请求体资源
+            await self.request.aclose_body_contract(body_close_reason)

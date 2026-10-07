@@ -149,6 +149,18 @@ class ServerError(HTTPException):
 InternalServerError = ServerError
 
 
+class BodyContractViolation(ServerError):
+    """违反请求体读取契约。
+
+    例如：独占流与共享缓存冲突、受限重放后缓存已清除、
+    契约关闭后继续读取、源头失败后内容不完整等。
+    """
+
+
+class BodyReplayExhausted(BodyContractViolation):
+    """请求体受限重放次数已用尽。"""
+
+
 class ServiceUnavailable(HTTPException):
     """项目内部接口说明。"""
 
